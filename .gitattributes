@@ -1,0 +1,3 @@
+# Keeps GitHub's language bar and the "Swift" badge off the repo card.
+# Purely cosmetic — it changes nothing about the code or how it builds.
+*.swift linguist-detectable=false
