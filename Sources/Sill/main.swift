@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.showShortcuts = { [weak self] in self?.showShortcuts() }
         buildStatusItem()
 
+        // Anything already on the clipboard at launch is not a new capture.
+        Capture.markClipboardSeen()
+
         shift.onTrigger = { [weak self] in self?.capture() }
         shift.start()
 
@@ -34,22 +37,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ask at most once per launch, and never block the capture on the answer.
         // ("Ask once ever" was wrong: an ad-hoc build loses the grant on every rebuild,
         // which left the app permanently mute.)
-        if !Capture.isTrusted, !askedForTrustThisLaunch {
+        if Capture.isTrusted {
+            Capture.hasEverBeenTrusted = true
+        } else if Capture.grantIsStale {
+            // Asking again is useless here — macOS already has a decision on file for this
+            // bundle, so no prompt appears and the user sees nothing happen. Tell them what
+            // actually fixes it.
+            // Stop here. Falling through filed the clipboard instead and then overwrote
+            // this warning with "Captured from X" — so the user was told the opposite of
+            // what happened, and got stale content in their list.
+            state.flash("Accessibility expired — switch Sill off and on in Settings")
+            controller.show()
+            return
+        } else if !askedForTrustThisLaunch {
             askedForTrustThisLaunch = true
             Capture.requestTrust()
         }
 
-        // Without Accessibility a capture is just a clipboard read, so firing the gesture
-        // again with nothing newly copied would file the same thing twice. Say so instead.
-        if !Capture.isTrusted, Capture.clipboardIsUnchanged() {
+        // With Accessibility on, the gesture means "take what I've selected" — full stop.
+        // The clipboard is only consulted when there is no selection.
+        //
+        // Order matters here and got this wrong twice. Checking the clipboard first meant
+        // an old screenshot won every time. Then gating that on "did the clipboard change"
+        // failed too, because our own synthesised ⌘C *and* the restore afterwards each
+        // bump the clipboard's change counter — so the next capture always looked fresh
+        // and the stale image came back. Hence: selection first, clipboard never guessed at.
+        if Capture.isTrusted {
+            Capture.captureSelection { [weak self] text in
+                guard let self else { return }
+                Capture.markClipboardSeen()          // after the restore, not before
+                if let text, !text.isEmpty {
+                    self.file(text, from: source)
+                } else if Capture.wasBusy {
+                    // A second gesture landed while the first was still polling. Saying
+                    // "Nothing selected" made people tap again and file a duplicate.
+                    Capture.wasBusy = false
+                } else {
+                    self.state.flash("Nothing selected")
+                    self.controller.show()
+                }
+            }
+            return
+        }
+
+        // No Accessibility: the clipboard is all we have, so it must be something new.
+        guard !Capture.clipboardIsUnchanged() else {
             state.flash("Nothing new copied — press ⌘C first")
             controller.show()
             return
         }
-        Capture.markClipboardSeen()
+        fileClipboardFallback(from: source)
+    }
 
-        // A screenshot on the clipboard wins. You took it deliberately, and there's almost
-        // always stale text sitting behind it that would win otherwise.
+    /// Whatever is on the clipboard — an image if there is one, otherwise text.
+    private func fileClipboardFallback(from source: Source?) {
+        Capture.markClipboardSeen()
         if let png = Capture.clipboardImage() {
             if store.addImage(png, caption: nil, to: state.activeSection, source: source) {
                 state.flash("Screenshot captured")
@@ -57,13 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.show()
             return
         }
-
-        Capture.captureSelection { [weak self] text in
-            #if DEBUG
-            NSLog("Sill: captured \(text?.count ?? -1) chars")
-            #endif
-            self?.file(text, from: source)
-        }
+        file(Capture.clipboardText(), from: source)
     }
 
     private var askedForTrustThisLaunch = false
@@ -205,10 +241,15 @@ MainActor.assumeIsolated {
     sillDelegate = delegate
     app.delegate = delegate
     // .accessory = no Dock icon, no menu bar takeover. Sill is furniture, not an app you "open".
-    // SILL_REGULAR_APP=1 forces a normal Dock app, which is the only way automation and
-    // accessibility tooling can see it by name. Testing only.
+    // SILL_REGULAR_APP=1 forces a normal Dock app — the only way UI-automation tooling can
+    // see it by name. DEBUG only: a release build must not let an env var change how the app
+    // presents itself.
+    #if DEBUG
     app.setActivationPolicy(
         ProcessInfo.processInfo.environment["SILL_REGULAR_APP"] == "1" ? .regular : .accessory
     )
+    #else
+    app.setActivationPolicy(.accessory)
+    #endif
 }
 app.run()

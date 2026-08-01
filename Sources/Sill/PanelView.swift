@@ -11,10 +11,15 @@ struct PanelView: View {
     @State private var renameDraft = ""
     private enum Field: Hashable { case search, composer, list, rename }
 
+    /// Invisible element at the end of the list, so "scroll to the bottom" means the
+    /// actual bottom rather than the last note's edge.
+    private static let bottomAnchor = "sill.bottom"
+
     var body: some View {
         VStack(spacing: 0) {
             dragHandle
             header
+            staleGrantBanner
             storeProblem
             content
             composer
@@ -211,6 +216,37 @@ struct PanelView: View {
     /// Nothing was warning the user when writes failed. If macOS denies access to
     /// Documents, captures land, toasts say "Captured", and the file is never written —
     /// everything vanishes on quit with no indication it was ever at risk.
+    /// The specific, confusing case: System Settings shows Sill switched ON, but macOS
+    /// doesn't trust it, because the grant is tied to a fingerprint of the app that changed
+    /// on the last update. Re-prompting does nothing. Only toggling it off and on works.
+    @ViewBuilder
+    private var staleGrantBanner: some View {
+        if Capture.grantIsStale {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Accessibility needs re-approving")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Text("The switch still looks on. Turn Sill off, then on again.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Settings") { Capture.openAccessibilitySettings() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Theme.pad)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .fill(Theme.surface)
+            )
+            .padding(.horizontal, Theme.panelPad)
+            .padding(.top, 8)
+        }
+    }
+
     @ViewBuilder
     private var storeProblem: some View {
         if let problem = store.loadError ?? store.lastWriteError {
@@ -271,8 +307,14 @@ struct PanelView: View {
 
             // Managing lists, not just switching between them. There was no way to
             // remove or rename one at all — you could create them and never clean up.
-            Menu("Manage Lists") {
-                ForEach(store.sections.filter { $0 != "Inbox" }, id: \.self) { name in
+            // Only when there is something to manage. `.disabled` was wrong here:
+            // SwiftUI greys out a disabled Button but NOT a disabled Menu, so with
+            // Inbox as your only list this rendered in full black and did nothing
+            // when clicked — a button that looks live and isn't.
+            let managed = store.sections.filter { $0 != "Inbox" }
+            if !managed.isEmpty {
+                Menu("Manage Lists") {
+                    ForEach(managed, id: \.self) { name in
                     Menu(name) {
                         Button("Rename…") { state.renaming = name }
                         Button("Delete List", role: .destructive) {
@@ -288,9 +330,9 @@ struct PanelView: View {
                                         : "Deleted “\(name)”, \(moved) moved to Inbox — ⌘Z")
                         }
                     }
+                    }
                 }
             }
-            .disabled(store.sections.filter { $0 != "Inbox" }.isEmpty)
 
             Divider()
 
@@ -504,10 +546,15 @@ struct PanelView: View {
                             }
                         }
                     }
+                    // Scrolling to the last *note* aligns that note with the viewport
+                    // edge — which is inside the fade. Scrolling to a spacer past it lands
+                    // where a manual scroll-to-end lands, with the note fully clear.
+                    Color.clear
+                        .frame(height: 34)
+                        .id(Self.bottomAnchor)
                 }
                 .padding(.horizontal, Theme.panelPad)
                 .padding(.top, 4)
-                .padding(.bottom, Theme.panelPad)
                 // Drives the leave transition and the rows closing the gap behind it.
                 .animation(Theme.reduceMotion ? nil : Theme.leave, value: state.lingering)
             }
@@ -518,11 +565,14 @@ struct PanelView: View {
             // first 18pt makes a partly-scrolled line read as "there's more above" instead
             // of as a rendering fault.
             .mask(
+                // Fade at both ends. The trailing padding below is sized to clear this
+                // band, so at the end of the list the last note sits fully above the fade
+                // and stays crisp — the fade lands on empty space, not on the note.
                 LinearGradient(
                     stops: [
                         .init(color: .clear, location: 0),
                         .init(color: .black, location: 0.035),
-                        .init(color: .black, location: 0.97),
+                        .init(color: .black, location: 0.965),
                         .init(color: .clear, location: 1)
                     ],
                     startPoint: .top, endPoint: .bottom
@@ -532,9 +582,20 @@ struct PanelView: View {
             // that's off-screen, so the only evidence it worked was a toast that vanished
             // in 1.6 seconds — which reads as "nothing happened".
             .onChange(of: store.items.count) {
-                guard let last = store.items.last?.id else { return }
-                withAnimation(Theme.reduceMotion ? nil : Theme.spring) {
-                    proxy.scrollTo(last, anchor: .bottom)
+                // `store.items.last` is the last item in file order, which is not the last
+                // row on screen once there are several lists. Scroll to the row that
+                // actually renders last, and do it after layout has settled — scrolling in
+                // the same turn as the insert lands short, which is the "doesn't quite go
+                // to the bottom" symptom.
+                guard let lastVisible = visibleSections.reversed()
+                        .compactMap({ (groups[$0] ?? []).last?.id }).first
+                else { return }
+                _ = lastVisible
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                    withAnimation(Theme.reduceMotion ? nil : Theme.spring) {
+                        proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                    }
                 }
             }
             .onChange(of: state.selection) {
@@ -809,12 +870,16 @@ struct PanelView: View {
             Button("Back to \(source.appName)") { reveal(item) }
         }
         Divider()
-        Menu("Move to") {
-            ForEach(store.sections.filter { $0 != item.section }, id: \.self) { section in
-                Button(section) { store.move(ids: ids(including: item), toSection: section) }
+        // Shown only when there is somewhere else to move to. A disabled Menu is not
+        // greyed out by SwiftUI, so `.disabled` here left a live-looking dead item.
+        let elsewhere = store.sections.filter { $0 != item.section }
+        if !elsewhere.isEmpty {
+            Menu("Move to") {
+                ForEach(elsewhere, id: \.self) { section in
+                    Button(section) { store.move(ids: ids(including: item), toSection: section) }
+                }
             }
         }
-        .disabled(store.sections.count < 2)
         Divider()
         Button("Delete", role: .destructive) { confirmDelete(ids(including: item)) }
     }
@@ -966,6 +1031,9 @@ struct PanelView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(store.copyText(for: ids, asList: forceList),
                                        forType: .string)
+        // Ours, not the user's. Without this the next capture sees a "changed" clipboard,
+        // decides it's fresh, and re-files the note you just copied out of Sill.
+        Capture.markClipboardSeen()
 
         // Copy as List ticks them off in the same motion. Sending prompts to the chat and
         // marking them done are one act — splitting them is what turns a queue into a pile.
@@ -995,6 +1063,7 @@ struct PanelView: View {
         } else {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
+            Capture.markClipboardSeen()
             state.flash("Copied — ⌘V to paste")
         }
     }
@@ -1033,10 +1102,16 @@ private struct AttachmentThumbnail: View {
     var body: some View {
         Group {
             if let image {
+                // A definite height, not a max. `.aspectRatio(.fit)` with `maxHeight`
+                // reports one size to the layout and draws another, so the scroll view
+                // under-measured its own content and stopped short of the real end —
+                // the last rows were literally unreachable.
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: 150, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: 150)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)

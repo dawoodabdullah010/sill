@@ -22,7 +22,7 @@
     <string>14.0</string>
     <!-- Agent app: no Dock icon, no menu bar. Sill lives in the status bar. -->
     <key>LSUIElement</key>
-    <false/>
+    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

@@ -36,6 +36,9 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 # No 2>/dev/null: a silent signing failure produces a bundle that won't launch at
 # all on Apple silicon, with no clue why.
 echo "→ signing as: $IDENTITY"
+# Extended attributes (quarantine flags, Finder info) travel with copied files and make
+# codesign fail with "resource fork, Finder information, or similar detritus not allowed".
+xattr -cr "$APP"
 codesign --force --sign "$IDENTITY" --identifier app.sill.Sill "$APP"
 
 if [ "$IDENTITY" = "-" ]; then

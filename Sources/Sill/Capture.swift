@@ -129,6 +129,9 @@ enum Capture {
     /// clipboard is permanently replaced.
     private static var isCapturing = false
 
+    /// Set when a gesture was dropped because one was already in flight.
+    static var wasBusy = false
+
     /// Order matters, and it is the opposite of what looks elegant.
     ///
     /// `AXSelectedText` reads the *focused* element. In a browser or an Electron app the
@@ -140,13 +143,17 @@ enum Capture {
     /// what ⌘C would copy. So that goes first whenever we're allowed to do it, and the AX
     /// read is only a fallback for apps where the copy yields nothing.
     static func captureSelection(completion: @escaping (String?) -> Void) {
-        guard !isCapturing else { completion(nil); return }
+        guard !isCapturing else { wasBusy = true; completion(nil); return }
 
         if isTrusted {
             isCapturing = true
             selectionViaSynthesizedCopy { copied in
                 isCapturing = false
-                completion(copied ?? selectedTextViaAccessibility() ?? clipboardText())
+                // Deliberately NOT falling back to `clipboardText()` here. That fallback
+                // meant "nothing is selected" quietly became "re-file whatever was on the
+                // clipboard", which is how the same stale item kept reappearing. Returning
+                // nil lets the caller decide, and say so.
+                completion(copied ?? selectedTextViaAccessibility())
             }
             return
         }
@@ -224,10 +231,45 @@ enum Capture {
     /// Without Accessibility a capture just reads the clipboard, so tapping the gesture
     /// twice with nothing newly copied would file the same text again and again. This is
     /// what stops that.
+    /// Seeded at launch with whatever is already on the clipboard, so the first capture
+    /// after starting Sill can't file something you copied an hour ago in another app.
+    /// That was the "random stuff gets pasted" behaviour.
+    /// Not initialised inline: Swift statics are lazy, so the "seed" would have run on
+    /// first *access* — inside `clipboardIsUnchanged()` itself — reading the same value it
+    /// was about to compare against. That made the first untrusted capture after every
+    /// launch always report "nothing new copied", even right after a real ⌘C.
+    /// `main.swift` seeds it explicitly at startup instead.
     private static var lastSeenChangeCount = -1
+
+    /// True while Sill itself is driving the pasteboard — a capture's synthesized copy,
+    /// or a send and its deferred restore. Any change during that window is ours.
+    private static var isDrivingPasteboard = false
 
     static func clipboardIsUnchanged() -> Bool {
         NSPasteboard.general.changeCount == lastSeenChangeCount
+    }
+
+    /// True once the user has ever granted Accessibility on this machine.
+    /// Used to tell "never asked" from "the approval expired" — they need different words
+    /// and different actions, and the system prompt does nothing in the second case.
+    static var hasEverBeenTrusted: Bool {
+        get { UserDefaults.standard.bool(forKey: "SillEverTrusted") }
+        set { UserDefaults.standard.set(newValue, forKey: "SillEverTrusted") }
+    }
+
+    /// The state where the System Settings toggle looks ON but the app is not trusted.
+    ///
+    /// macOS keys the grant to a fingerprint of the binary, so every rebuild or update
+    /// silently invalidates it while leaving the row in place. Asking again does nothing —
+    /// the system won't re-prompt for an app it already has a decision for. The only fix
+    /// is toggling it off and on, so say that instead of showing a prompt that no-ops.
+    static var grantIsStale: Bool { hasEverBeenTrusted && !isTrusted }
+
+    static func openAccessibilitySettings() {
+        let modern = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+        let legacy = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        if let url = URL(string: modern), NSWorkspace.shared.open(url) { return }
+        if let url = URL(string: legacy) { NSWorkspace.shared.open(url) }
     }
 
     static func markClipboardSeen() {
@@ -255,7 +297,11 @@ enum Capture {
         post(keyCode: 8, flags: .maskCommand)   // 8 == "c"
 
         // Poll briefly; the target app fills the pasteboard asynchronously.
-        poll(pasteboard, changingFrom: before, attempt: 0) { copied in
+        // The prior text matters: a "the counter moved" test alone is satisfied by
+        // *anything* touching the pasteboard mid-poll — including Sill's own deferred
+        // restore from a Send — which then gets filed as if the user had copied it.
+        let priorText = pasteboard.string(forType: .string)
+        poll(pasteboard, changingFrom: before, priorText: priorText, attempt: 0) { copied in
             restore(saved, to: pasteboard)
             completion(copied)
         }
@@ -274,8 +320,10 @@ enum Capture {
 
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
+        isDrivingPasteboard = true
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        markClipboardSeen()
 
         // Let the target actually come forward before typing into it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -284,6 +332,8 @@ enum Capture {
             // restoring too early pastes the user's *old* clipboard into their chat.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 restore(saved, to: pasteboard)
+                markClipboardSeen()
+                isDrivingPasteboard = false
             }
         }
         return true
@@ -308,9 +358,13 @@ enum Capture {
     }
 
     private static func restore(_ saved: Saved, to pasteboard: NSPasteboard) {
-        // Nothing usable was captured, so leave whatever is there alone rather than
-        // clearing it. Losing the user's clipboard is worse than a stale capture.
-        guard !saved.items.isEmpty else { return }
+        // Nothing preservable was captured — but "there was nothing there" and "we
+        // couldn't copy what was there" both land here, and in both cases leaving our own
+        // synthesized copy behind is wrong: the next ⌘V would paste the captured text.
+        guard !saved.items.isEmpty else {
+            pasteboard.clearContents()
+            return
+        }
         pasteboard.clearContents()
         let rebuilt = saved.items.map { dict -> NSPasteboardItem in
             let item = NSPasteboardItem()
@@ -322,17 +376,20 @@ enum Capture {
 
     private static func poll(_ pasteboard: NSPasteboard,
                              changingFrom before: Int,
+                             priorText: String?,
                              attempt: Int,
                              completion: @escaping (String?) -> Void) {
         guard attempt < 20 else { completion(nil); return }   // ~600ms ceiling
-        if pasteboard.changeCount != before {
+        if pasteboard.changeCount != before,
+           pasteboard.string(forType: .string) != priorText {
             completion(pasteboard.string(forType: .string)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .nilIfEmpty)
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-            poll(pasteboard, changingFrom: before, attempt: attempt + 1, completion: completion)
+            poll(pasteboard, changingFrom: before, priorText: priorText,
+                 attempt: attempt + 1, completion: completion)
         }
     }
 
