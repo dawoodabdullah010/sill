@@ -1,0 +1,54 @@
+# ── Swift / SwiftPM ────────────────────────────────────────────────
+.build/
+.swiftpm/
+Package.resolved
+*.o
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.dSYM/
+
+# ── Build output ───────────────────────────────────────────────────
+build/
+dist/
+*.app
+*.dmg
+*.zip
+
+# ── Icon intermediates (Sill.icns is committed; the iconset is not) ─
+*.iconset/
+
+# ── Xcode, if anyone opens the package in it ───────────────────────
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# ── macOS ──────────────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Editors ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Local working notes — research artifacts, not part of the project
+PLAN.md
+PLAN-V2.md
+PLAN-SHIP.md
+GAME-PLAN.md
+AGENT-BRIEF.md
+HANDOFF.md
+demo/
+notes/
+scratch/
+
+# ── Never publish: third-party media kept only for local reference ─
+*.mp4
+*.mov
+reference-*
