@@ -10,6 +10,8 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-1a1a19)](#requirements)
 [![Build from source](https://img.shields.io/badge/install-build%20from%20source-1a1a19)](#install)
 
+<img src="docs/hero.png" width="340" alt="The Sill panel: a search field, five captured notes each showing the app they came from, and a composer at the bottom">
+
 </div>
 
 ---
@@ -30,10 +32,6 @@ it from the panel, and clearing moves it to an archive you can still read and re
 
 Everything lives in **plain markdown files** you own. No database, no account, no sync, and
 no network code anywhere in the app.
-
-Sill was inspired by [Copper](https://shadcn.com/copper) by shadcn, which explores the same
-idea beautifully. Sill is an independent, free, open-source take — different code, different
-design, different tradeoffs. If you like the idea, go look at Copper too.
 
 ## Requirements
 
