@@ -1,3 +1,7 @@
-# Keeps GitHub's language bar and the "Swift" badge off the repo card.
+# Keeps GitHub's language bar and the language badge off the repo card.
 # Purely cosmetic — it changes nothing about the code or how it builds.
-*.swift linguist-detectable=false
+# The shell entries matter too: excluding only Swift promotes build.sh to
+# "primary language", which is a worse label than the one being removed.
+*.swift   linguist-detectable=false
+*.sh      linguist-detectable=false
+*.command linguist-detectable=false
