@@ -6,11 +6,9 @@
 
 **A small panel that holds the things you're not ready to send yet.**
 
-[![Download](https://img.shields.io/github/v/release/dawoodabdullah010/sill?label=download&color=1a1a19)](https://github.com/dawoodabdullah010/sill/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-1a1a19.svg)](LICENSE)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-1a1a19)](#requirements)
-
-<img src="docs/hero.png" width="720" alt="Sill docked beside a chat window">
+[![Build from source](https://img.shields.io/badge/install-build%20from%20source-1a1a19)](#install)
 
 </div>
 
@@ -43,9 +41,13 @@ macOS 14 (Sonoma) or later. Universal — Apple silicon and Intel.
 
 ## Install
 
-### Build from source (recommended)
+> **There is no download yet.** A notarized `.zip` is coming shortly. Until then, build it —
+> it takes about fifteen seconds and needs nothing but Xcode's command line tools.
 
-Locally compiled apps are never quarantined by macOS, so there's no Gatekeeper warning at all.
+### Build from source
+
+Two upsides over a download, both real: locally compiled apps are never quarantined by macOS,
+so there is no Gatekeeper warning at all, and you can read every line of what you're running.
 
 ```bash
 git clone https://github.com/dawoodabdullah010/sill.git
@@ -72,22 +74,10 @@ free self-signed certificate so the identity stays stable. Then build with
 
 ### Download a release
 
-Grab the `.zip` from [Releases](https://github.com/dawoodabdullah010/sill/releases/latest),
-unzip, and drag `Sill.app` into `/Applications`.
-
-Sill is **not notarized by Apple** — that requires a paid Developer account this project
-doesn't have. macOS will refuse to open the downloaded copy, usually saying *"Sill is damaged
-and can't be opened."* It isn't damaged; that's the message macOS 15+ shows for any app it
-can't check with Apple. Clear the download flag once:
-
-```bash
-xattr -d com.apple.quarantine /Applications/Sill.app
-```
-
-`xattr` edits the invisible tags macOS attaches to files. Browsers stamp every download with
-`com.apple.quarantine`, and that stamp is what triggers the warning. Removing it says "I know
-where this came from." It changes nothing inside the app. If that trade doesn't sit right,
-build from source instead — it takes about a minute.
+Not available yet. A build signed and notarized by Apple — which opens with no warning and,
+more importantly, keeps its Accessibility permission across updates — will appear under
+[Releases](https://github.com/dawoodabdullah010/sill/releases) soon. Watch the repo if you'd
+rather wait for it than compile.
 
 ## How it works
 
